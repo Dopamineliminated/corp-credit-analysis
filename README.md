@@ -22,6 +22,7 @@
 5. **연결의 함정 — 한국콜마는 별도로 봐야 한다.** 한국콜마 연결 매출의 **약 57%가 제약 등 자회사**라 본업이 가려져 있었다. **별도(OFS)** 기준으로 보면 영업이익률 7.9%→**11.5%**, ROE 8.3%→**18.3%**로 — *순수 화장품 ODM 본체로는 코스메카에 필적하는 우량*임이 드러난다.
 6. **2025년 흐름 — 코스메카의 가속.** 분기 누적 데이터로 보면 코스맥스·한국콜마는 연 +11% 안정 성장인 반면, **코스메카코리아는 1분기 −5.8%(역성장)에서 출발해 3분기 +16.8%, 연간 +22.2%로 갈수록 가속**. 연간 숫자만으론 못 보는 하반기 모멘텀이 분기 데이터에서 드러난다. 2025년 영업이익률도 3사 모두 개선(코스메카 **13.0%** 선두).
 7. **분기 신용지표 — 성장의 이면.** 분기말 BS로 신용지표를 8개 분기 추적하니, **코스메카가 외형 가속과 동시에 부채비율 68%→88%·Altman Z' 2.32→1.94(후 2.23 회복)로 레버리지가 올라간** 사실이 잡힌다. *고성장을 부채로 조달*한 것 — 연말 한 컷이 아니라 분기로 봐야 보이는 '성장의 질'.
+8. **밸류체인 — "곡괭이가 이긴다".** 원료→ODM→브랜드로 넓혀 보니, 통념과 달리 **마진은 원료(11.5%)>ODM(9.2%)>브랜드(8.5%), 성장은 ODM(CAGR 13.4%)>원료(9.9%)≫브랜드(2.0%)**. 대형 브랜드(아모레·LG생건)는 중국 부진으로 **역성장(−3%대)**한 반면 ODM·원료가 성장을 가져갔다. 단, 브랜드는 **재무는 가장 안전**(Altman 3.88·부채비율 24%)해 *"저성장 캐시카우 vs 고성장 고레버리지(ODM)"* 의 계층 분업이 드러난다.
 
 > 숫자 산출 근거는 [`output/key_metrics.md`](output/key_metrics.md), 상세 해설은 [`report/REPORT.md`](report/REPORT.md),
 > 면접 활용은 [`report/면접활용_가이드.md`](report/면접활용_가이드.md) 참조.
@@ -85,6 +86,16 @@
 - **계절성.** 코스맥스 부채비율은 매년 1Q에 고점(운전자본·배당)→4Q 저점. 연말 한 컷만 보면 놓치는 패턴.
 - **한국콜마는 점진 개선.** Altman Z'가 위험선(1.23) 부근(24.1Q 1.29)에서 1.46까지 꾸준히 상승.
 
+### 10) 밸류체인 확장 — K뷰티에서 가치는 어디에 쌓이나
+![밸류체인 비교](output/charts/chart12_valuechain.png)
+
+분석을 **원료(선진뷰티사이언스·대봉엘에스) → ODM(3사) → 브랜드(아모레·LG생건·클리오·마녀공장)** 로 넓혔다.
+- **통념을 깨는 결과.** "브랜드가 가장 많이 번다"는 직관과 달리, 2024년 마진은 **원료(11.5%) > ODM(9.2%) > 브랜드(8.5%)**, 자본효율(ROE)은 **ODM(14.4%)** 이 1위. ODM은 "곡괭이를 파는" 포지션의 힘을 보여준다.
+- **성장의 이동.** 매출 CAGR(20→24)은 **ODM +13.4% > 원료 +9.9% ≫ 브랜드 +2.0%**. 대형 브랜드 아모레(−3.2%)·LG생건(−3.5%)은 중국 부진으로 **역성장**, 성장은 제조·소재단으로 이동했다.
+- **계층별 재무 성격.** 브랜드는 저성장이지만 **재무는 가장 안전**(Altman 3.88·부채비율 24%)한 캐시카우, ODM은 고성장·고ROE지만 **고레버리지**(부채 152%·Altman 1.80). 가치사슬 안에서 *수익·성장·안정성의 역할 분담*이 뚜렷하다.
+
+> ※ 브랜드 대형사는 비(非)화장품(LG생건 생활용품·음료)이 섞여 있어 마진이 보수적으로 보일 수 있다([`data/SOURCES.md`](data/SOURCES.md)).
+
 ---
 
 ## 기술 스택 & 방법
@@ -96,15 +107,16 @@
 | 분석 | **SQL** 쿼리 | 윈도우 함수(LAG)·CTE·CASE·RANK로 YoY·비율·순위·연결vs별도 비교 ([`sql/queries.sql`](sql/queries.sql)) |
 | 분석 | **Python** (pandas) | 재무비율 8종 + **Altman Z'-Score** 계산 ([`src/analyze.py`](src/analyze.py)) |
 | 흐름 | **분기 누적(YTD)+BS** | 분기보고서로 2025년 모멘텀(YoY) + 분기 신용지표(부채·유동·이자보상·Altman) 추적 ([`src/quarterly.py`](src/quarterly.py)) |
-| 시각화 | **matplotlib** | 차트 11종 자동 생성 (`output/charts/`) |
+| 확장 | **밸류체인** | 원료·브랜드까지 9개사로 넓혀 계층별 수익성·성장·신용 비교 ([`src/valuechain.py`](src/valuechain.py)) |
+| 시각화 | **matplotlib** | 차트 12종 자동 생성 (`output/charts/`) |
 
 ## 프로젝트 구조
 
 ```
 corp-credit-analysis/
-├── data/            # SOURCES.md(출처), raw/(연간 JSON), raw_q/(분기 JSON), corp_codes.csv
+├── data/            # SOURCES.md(출처), raw/·raw_q/·raw_vc/(JSON), corp_codes.csv
 ├── sql/             # schema.sql, queries.sql
-├── src/             # config · fetch_dart · build_db · run_sql · analyze · quarterly
+├── src/             # config · fetch_dart · build_db · run_sql · analyze · quarterly · valuechain
 ├── output/          # corp.db, charts/*.png, key_metrics.md
 └── report/          # REPORT.md(분석 리포트), 면접활용_가이드.md
 ```
@@ -122,6 +134,7 @@ python src/build_db.py     # SQLite DB 적재
 python src/run_sql.py      # 분석 SQL 7종 실행·출력
 python src/analyze.py      # 재무비율 + Altman Z + 차트 8종 생성
 python src/quarterly.py    # 2025 분기 흐름 + 분기 신용지표 + 차트 9~11 생성
+python src/valuechain.py   # 밸류체인(원료·ODM·브랜드) 비교 + 차트 12 생성
 ```
 
 ## 데이터 출처 & 한계
