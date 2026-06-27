@@ -18,7 +18,7 @@ import xml.etree.ElementTree as ET
 
 import requests
 
-from config import COMPANIES, YEARS, REPRT_CODE, FS_DIV, RAW, DATA
+from config import COMPANIES, YEARS, REPRT_CODE, FS_DIVS, RAW, DATA
 
 CORP_CODE_URL = "https://opendart.fss.or.kr/api/corpCode.xml"
 FS_URL = "https://opendart.fss.or.kr/api/fnlttSinglAcntAll.json"
@@ -70,13 +70,13 @@ def load_corp_code_map(key):
     return mapping
 
 
-def fetch_financials(key, corp_code, year):
+def fetch_financials(key, corp_code, year, fs_div):
     params = {
         "crtfc_key": key,
         "corp_code": corp_code,
         "bsns_year": str(year),
         "reprt_code": REPRT_CODE,
-        "fs_div": FS_DIV,
+        "fs_div": fs_div,
     }
     r = requests.get(FS_URL, params=params, timeout=60)
     r.raise_for_status()
@@ -95,18 +95,19 @@ def main():
         corp_code, corp_name = code_map[stock]
         comp["corp_code"] = corp_code
         for year in YEARS:
-            out = RAW / f"{comp['name']}_{year}.json"
-            if out.exists():
-                print(f"[skip] {out.name} (이미 있음)")
-                continue
-            print(f"[fetch] {comp['name']} {year}년 재무제표...")
-            data = fetch_financials(key, corp_code, year)
-            status = data.get("status")
-            if status != "000":
-                print(f"        ! status={status} msg={data.get('message')}")
-            out.write_text(json.dumps(data, ensure_ascii=False, indent=2),
-                           encoding="utf-8")
-            time.sleep(0.4)  # API 예의상 간격
+            for fs_div in FS_DIVS:
+                out = RAW / f"{comp['name']}_{year}_{fs_div}.json"
+                if out.exists():
+                    print(f"[skip] {out.name} (이미 있음)")
+                    continue
+                print(f"[fetch] {comp['name']} {year}년 {fs_div} 재무제표...")
+                data = fetch_financials(key, corp_code, year, fs_div)
+                status = data.get("status")
+                if status != "000":
+                    print(f"        ! status={status} msg={data.get('message')}")
+                out.write_text(json.dumps(data, ensure_ascii=False, indent=2),
+                               encoding="utf-8")
+                time.sleep(0.4)  # API 예의상 간격
 
     # 대상 기업 corp_code 기록(추적용)
     (DATA / "companies.json").write_text(

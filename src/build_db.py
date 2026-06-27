@@ -6,7 +6,7 @@
 import json
 import sqlite3
 
-from config import (COMPANIES, YEARS, FS_DIV, DB_PATH, RAW, ROOT,
+from config import (COMPANIES, YEARS, FS_DIVS, DB_PATH, RAW, ROOT,
                     ACCOUNT_MAP, ACCOUNT_ORDER)
 
 
@@ -67,38 +67,38 @@ def main():
     n_raw = n_fin = 0
     for comp in COMPANIES:
         for year in YEARS:
-            path = RAW / f"{comp['name']}_{year}.json"
-            if not path.exists():
-                print(f"[경고] {path.name} 없음 — fetch_dart.py 먼저 실행")
-                continue
-            payload = json.loads(path.read_text(encoding="utf-8"))
-            if payload.get("status") != "000":
-                print(f"[경고] {comp['name']} {year} status={payload.get('status')} — 건너뜀")
-                continue
-            items = [it for it in payload.get("list", [])
-                     if (it.get("fs_div") or FS_DIV) == FS_DIV]
-            if not items:
+            for basis in FS_DIVS:
+                path = RAW / f"{comp['name']}_{year}_{basis}.json"
+                if not path.exists():
+                    print(f"[경고] {path.name} 없음 — fetch_dart.py 먼저 실행")
+                    continue
+                payload = json.loads(path.read_text(encoding="utf-8"))
+                if payload.get("status") != "000":
+                    print(f"[경고] {comp['name']} {year} {basis} "
+                          f"status={payload.get('status')} — 건너뜀")
+                    continue
+                # 요청 시 fs_div로 기준을 지정했으므로 응답 전체가 해당 기준이다.
                 items = payload.get("list", [])
 
-            # 원천 라인아이템 적재
-            for it in items:
-                cur.execute(
-                    "INSERT OR REPLACE INTO fs_raw VALUES (?,?,?,?,?,?,?)",
-                    (comp["name"], year, it.get("fs_div"), it.get("sj_div"),
-                     it.get("account_id"), it.get("account_nm"),
-                     to_number(it.get("thstrm_amount"))))
-                n_raw += 1
+                # 원천 라인아이템 적재
+                for it in items:
+                    cur.execute(
+                        "INSERT OR REPLACE INTO fs_raw VALUES (?,?,?,?,?,?,?)",
+                        (comp["name"], year, basis, it.get("sj_div"),
+                         it.get("account_id"), it.get("account_nm"),
+                         to_number(it.get("thstrm_amount"))))
+                    n_raw += 1
 
-            # 정제 재무계정 추출
-            vals = [pick_account(items, t) for t in ACCOUNT_ORDER]
-            cur.execute(
-                "INSERT OR REPLACE INTO financials "
-                "(corp_name, bsns_year, " + ", ".join(ACCOUNT_ORDER) + ") "
-                "VALUES (?,?," + ",".join(["?"] * len(ACCOUNT_ORDER)) + ")",
-                [comp["name"], year, *vals])
-            n_fin += 1
-            print(f"[적재] {comp['name']} {year}  매출={_fmt(vals[0])}  "
-                  f"영업이익={_fmt(vals[3])}  자산={_fmt(vals[5])}")
+                # 정제 재무계정 추출
+                vals = [pick_account(items, t) for t in ACCOUNT_ORDER]
+                cur.execute(
+                    "INSERT OR REPLACE INTO financials "
+                    "(corp_name, bsns_year, fs_basis, " + ", ".join(ACCOUNT_ORDER) + ") "
+                    "VALUES (?,?,?," + ",".join(["?"] * len(ACCOUNT_ORDER)) + ")",
+                    [comp["name"], year, basis, *vals])
+                n_fin += 1
+                print(f"[적재] {comp['name']} {year} {basis}  매출={_fmt(vals[0])}  "
+                      f"영업이익={_fmt(vals[3])}  자산={_fmt(vals[5])}")
 
     conn.commit()
     conn.close()

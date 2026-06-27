@@ -36,9 +36,20 @@ ORDER = [c["name"] for c in COMPANIES]
 COLORS = {"코스맥스": "#d6336c", "한국콜마": "#1c7ed6", "코스메카코리아": "#f08c00"}
 
 
-def load():
+def load(basis="CFS"):
     conn = sqlite3.connect(DB_PATH)
-    df = pd.read_sql_query("SELECT * FROM financials ORDER BY corp_name, bsns_year", conn)
+    df = pd.read_sql_query(
+        "SELECT * FROM financials WHERE fs_basis = ? ORDER BY corp_name, bsns_year",
+        conn, params=(basis,))
+    conn.close()
+    return df
+
+
+def load_company_all_bases(corp_name):
+    conn = sqlite3.connect(DB_PATH)
+    df = pd.read_sql_query(
+        "SELECT * FROM financials WHERE corp_name = ? ORDER BY bsns_year, fs_basis",
+        conn, params=(corp_name,))
     conn.close()
     return df
 
@@ -119,6 +130,51 @@ def altman_chart(df, fname):
     fig.tight_layout(); fig.savefig(CHARTS / fname, dpi=120); plt.close(fig)
 
 
+def kolmar_cfs_ofs_chart(fname):
+    """한국콜마 연결(CFS) vs 별도(OFS) — 매출·영업이익률 추이 비교."""
+    df = add_ratios(load_company_all_bases("한국콜마"))
+    cfs = df[df["fs_basis"] == "CFS"].sort_values("bsns_year")
+    ofs = df[df["fs_basis"] == "OFS"].sort_values("bsns_year")
+
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(13, 5))
+    # (좌) 매출
+    ax1.bar([y - 0.2 for y in cfs["bsns_year"]], cfs["revenue"] / 1e8,
+            width=0.4, label="연결(CFS)", color="#1c7ed6")
+    ax1.bar([y + 0.2 for y in ofs["bsns_year"]], ofs["revenue"] / 1e8,
+            width=0.4, label="별도(OFS)", color="#a5d8ff")
+    ax1.set_title("한국콜마 매출: 연결 vs 별도", fontsize=13, fontweight="bold")
+    ax1.set_xlabel("연도"); ax1.set_ylabel("매출(억원)")
+    ax1.set_xticks(sorted(cfs["bsns_year"])); ax1.legend(); ax1.grid(alpha=0.3, axis="y")
+    # (우) 영업이익률
+    ax2.plot(cfs["bsns_year"], cfs["영업이익률"], marker="o", label="연결(CFS)", color="#1c7ed6")
+    ax2.plot(ofs["bsns_year"], ofs["영업이익률"], marker="s", ls="--", label="별도(OFS)", color="#e8590c")
+    ax2.set_title("한국콜마 영업이익률: 연결 vs 별도", fontsize=13, fontweight="bold")
+    ax2.set_xlabel("연도"); ax2.set_ylabel("%")
+    ax2.set_xticks(sorted(cfs["bsns_year"])); ax2.legend(); ax2.grid(alpha=0.3)
+    fig.tight_layout(); fig.savefig(CHARTS / fname, dpi=120); plt.close(fig)
+    return cfs, ofs
+
+
+def write_kolmar_section(cfs, ofs):
+    """key_metrics.md 에 한국콜마 연결 vs 별도 비교 표를 덧붙인다."""
+    lines = ["\n## 한국콜마: 연결(CFS) vs 별도(OFS)\n",
+             "> 연결은 HK이노엔(제약) 등 종속회사 포함, 별도는 한국콜마 본체(화장품 ODM 중심).\n",
+             "| 연도 | 매출(억)·연결 | 매출(억)·별도 | 별도/연결 | 영업이익률·연결 | 영업이익률·별도 | 부채비율·연결 | 부채비율·별도 |",
+             "|---|--:|--:|--:|--:|--:|--:|--:|"]
+    c = cfs.set_index("bsns_year"); o = ofs.set_index("bsns_year")
+    for yr in sorted(c.index):
+        if yr not in o.index:
+            continue
+        share = o.loc[yr, "revenue"] / c.loc[yr, "revenue"] * 100
+        lines.append(
+            f"| {yr} | {c.loc[yr,'revenue']/1e8:,.0f} | {o.loc[yr,'revenue']/1e8:,.0f} | "
+            f"{share:.0f}% | {c.loc[yr,'영업이익률']:.1f}% | {o.loc[yr,'영업이익률']:.1f}% | "
+            f"{c.loc[yr,'부채비율']:.1f}% | {o.loc[yr,'부채비율']:.1f}% |")
+    with open(OUTPUT / "key_metrics.md", "a", encoding="utf-8") as f:
+        f.write("\n".join(lines) + "\n")
+    print("[작성] output/key_metrics.md (한국콜마 별도 비교 추가)")
+
+
 def write_key_metrics(df):
     latest_year = int(df["bsns_year"].max())
     lines = ["# 핵심 지표 (Key Metrics)\n",
@@ -155,6 +211,10 @@ def main():
     bar_latest(df, "유동비율", "유동비율 비교 (최신연도)", "%", "chart5_current.png")
     altman_chart(df, "chart6_altman.png")
     write_key_metrics(df)
+
+    # 한국콜마 연결 vs 별도(OFS) 비교
+    cfs, ofs = kolmar_cfs_ofs_chart("chart7_kolmar_cfs_ofs.png")
+    write_kolmar_section(cfs, ofs)
 
     # 콘솔 요약
     pd.set_option("display.unicode.east_asian_width", True)

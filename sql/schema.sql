@@ -16,18 +16,19 @@ CREATE TABLE company (
 CREATE TABLE fs_raw (
     corp_name   TEXT NOT NULL,
     bsns_year   INTEGER NOT NULL,
-    fs_div      TEXT,                -- CFS(연결)/OFS(별도)
+    fs_basis    TEXT NOT NULL,       -- CFS(연결)/OFS(별도)
     sj_div      TEXT,                -- BS/IS/CIS/CF/SCE
     account_id  TEXT,                -- IFRS 표준 태그
     account_nm  TEXT,                -- 계정명
     amount      REAL,                -- 당기 금액(원)
-    PRIMARY KEY (corp_name, bsns_year, sj_div, account_id, account_nm)
+    PRIMARY KEY (corp_name, bsns_year, fs_basis, sj_div, account_id, account_nm)
 );
 
--- 분석용으로 정제한 핵심 재무계정 (기업·연도 단위, 단위: 원)
+-- 분석용으로 정제한 핵심 재무계정 (기업·연도·기준 단위, 단위: 원)
 CREATE TABLE financials (
     corp_name           TEXT NOT NULL,
     bsns_year           INTEGER NOT NULL,
+    fs_basis            TEXT NOT NULL,   -- CFS(연결)/OFS(별도)
     revenue             REAL,   -- 매출액
     cogs                REAL,   -- 매출원가
     gross_profit        REAL,   -- 매출총이익
@@ -40,5 +41,5 @@ CREATE TABLE financials (
     current_liabilities REAL,   -- 유동부채
     retained_earnings   REAL,   -- 이익잉여금
     interest_expense    REAL,   -- 이자비용
-    PRIMARY KEY (corp_name, bsns_year)
+    PRIMARY KEY (corp_name, bsns_year, fs_basis)
 );
