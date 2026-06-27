@@ -1,9 +1,14 @@
 # -*- coding: utf-8 -*-
-"""2025년 흐름 추적 — 분기 누적(YTD) 재무 데이터로 모멘텀 분석.
+"""2025년 흐름 + 분기 단위 신용지표 추적 — 분기보고서(IS 누적 + BS 시점)로 분석.
 
   python src/quarterly.py   # (fetch_dart.py로 키 설정 후)
 
-연결(CFS) 기준. 1Q→상반기→3분기→연간 누적 매출의 YoY와 영업이익률 변화를 본다.
+연결(CFS) 기준. 2024~2025년 8개 분기(분기말)로:
+  · 매출 모멘텀(누적 YoY)
+  · 신용지표: 부채비율·유동비율(분기말 BS)·이자보상배율·Altman Z'(연환산)
+를 추적한다.
+  IS(매출·영업이익·순이익·금융비용): 누적(YTD, thstrm_add_amount)
+  BS(자산·부채·자본·유동자산·유동부채·이익잉여금): 분기말 시점(thstrm_amount)
 """
 import json
 import sqlite3
@@ -14,8 +19,8 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import requests
 
-from config import (COMPANIES, QUARTER_YEARS, QUARTERS, RAW_Q, DATA,
-                    CHARTS, OUTPUT, DB_PATH)
+from config import (COMPANIES, QUARTER_YEARS, QUARTERS, RAW_Q,
+                    CHARTS, OUTPUT, DB_PATH, ACCOUNT_MAP)
 from fetch_dart import get_api_key, load_corp_code_map, FS_URL
 
 for _f in ("Malgun Gothic", "AppleGothic", "NanumGothic"):
@@ -28,16 +33,17 @@ plt.rcParams["axes.unicode_minus"] = False
 
 ORDER = [c["name"] for c in COMPANIES]
 COLORS = {"코스맥스": "#d6336c", "한국콜마": "#1c7ed6", "코스메카코리아": "#f08c00"}
-CKPT = [lbl for _, lbl in QUARTERS]
+CKPT = [lbl for _, lbl in QUARTERS]                     # 1Q, 상반기, 3분기, 연간
+QLABEL = {"1Q": "1Q", "상반기": "2Q", "3분기": "3Q", "연간": "4Q"}
+MONTHS = {"1Q": 3, "상반기": 6, "3분기": 9, "연간": 12}
 
-# 누적 추출 대상 계정
-ACCT = {
-    "revenue": {"ids": ["ifrs-full_Revenue"], "names": ["매출액", "수익(매출액)", "영업수익"]},
-    "operating_income": {"ids": ["dart_OperatingIncomeLoss",
-                                 "ifrs-full_ProfitLossFromOperatingActivities"],
-                         "names": ["영업이익", "영업이익(손실)"]},
-    "net_income": {"ids": ["ifrs-full_ProfitLoss"], "names": ["당기순이익", "당기순이익(손실)"]},
-}
+# 흐름(누적) 항목 / 시점(분기말) 항목
+FLOW = ["revenue", "operating_income", "net_income", "interest_expense"]
+STOCK = ["total_assets", "total_liabilities", "total_equity",
+         "current_assets", "current_liabilities", "retained_earnings"]
+
+# 크로놀로지컬 시퀀스: (연도, 체크포인트, 라벨)
+SEQ = [(y, k, f"{str(y)[2:]}.{QLABEL[k]}") for y in QUARTER_YEARS for k in CKPT]
 
 
 def to_num(s):
@@ -52,13 +58,16 @@ def to_num(s):
         return None
 
 
-def pick_cum(items, target):
-    """누적(YTD) 금액 추출: thstrm_add_amount 우선, 없으면 thstrm_amount."""
-    ids = set(ACCT[target]["ids"])
-    names = ACCT[target]["names"]
+def _match(items, target, field_priority):
+    ids = set(ACCOUNT_MAP[target]["ids"])
+    names = ACCOUNT_MAP[target]["names"]
 
     def val(it):
-        return to_num(it.get("thstrm_add_amount")) or to_num(it.get("thstrm_amount"))
+        for f in field_priority:
+            v = to_num(it.get(f))
+            if v is not None:
+                return v
+        return None
 
     for it in items:
         if (it.get("account_id") or "").strip() in ids:
@@ -76,6 +85,14 @@ def pick_cum(items, target):
     return None
 
 
+def pick_flow(items, target):   # 누적 우선
+    return _match(items, target, ["thstrm_add_amount", "thstrm_amount"])
+
+
+def pick_stock(items, target):  # 분기말 시점값
+    return _match(items, target, ["thstrm_amount"])
+
+
 def fetch_quarter(key, corp_code, year, reprt):
     out = RAW_Q / f"{corp_code}_{year}_{reprt}.json"
     if out.exists():
@@ -91,52 +108,77 @@ def fetch_quarter(key, corp_code, year, reprt):
 def collect():
     key = get_api_key()
     code_map = load_corp_code_map(key)
-    rows = []  # (corp, year, ckpt, revenue, op, net)
+    data = {}  # (corp, year, ckpt) -> {field: value}
     for comp in COMPANIES:
         corp_code = code_map[comp["stock_code"]][0]
         for year in QUARTER_YEARS:
             for reprt, lbl in QUARTERS:
-                data = fetch_quarter(key, corp_code, year, reprt)
-                if data.get("status") != "000":
-                    print(f"  [skip] {comp['name']} {year} {lbl} status={data.get('status')}")
-                    rows.append((comp["name"], year, lbl, None, None, None))
-                    continue
-                items = data.get("list", [])
-                rows.append((comp["name"], year, lbl,
-                             pick_cum(items, "revenue"),
-                             pick_cum(items, "operating_income"),
-                             pick_cum(items, "net_income")))
-    return rows
+                payload = fetch_quarter(key, corp_code, year, reprt)
+                rec = {f: None for f in FLOW + STOCK}
+                if payload.get("status") == "000":
+                    items = payload.get("list", [])
+                    for f in FLOW:
+                        rec[f] = pick_flow(items, f)
+                    for f in STOCK:
+                        rec[f] = pick_stock(items, f)
+                else:
+                    print(f"  [skip] {comp['name']} {year} {lbl} status={payload.get('status')}")
+                data[(comp["name"], year, lbl)] = rec
+    return data
 
 
-def save_db(rows):
+# ── 지표 계산 ────────────────────────────────────────────────
+def div(a, b):
+    return a / b if (a is not None and b not in (None, 0)) else None
+
+
+def debt_ratio(r):    return div(r["total_liabilities"], r["total_equity"])
+def curr_ratio(r):    return div(r["current_assets"], r["current_liabilities"])
+def icr(r):           return div(r["operating_income"], r["interest_expense"])  # YTD=연환산 동일
+
+
+def altman_z(r, ckpt):
+    ta = r["total_assets"]
+    if not ta:
+        return None
+    f = 12.0 / MONTHS[ckpt]          # 흐름 연환산
+    x1 = div((r["current_assets"] or 0) - (r["current_liabilities"] or 0), ta)
+    x2 = div(r["retained_earnings"], ta)
+    x3 = div((r["operating_income"] or 0) * f, ta)
+    x4 = div(r["total_equity"], r["total_liabilities"])
+    x5 = div((r["revenue"] or 0) * f, ta)
+    if None in (x1, x2, x3, x4, x5):
+        return None
+    return 0.717*x1 + 0.847*x2 + 3.107*x3 + 0.420*x4 + 0.998*x5
+
+
+def save_db(data):
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
-    cur.executescript("""
-        DROP TABLE IF EXISTS quarterly;
-        CREATE TABLE quarterly (
-            corp_name TEXT, bsns_year INTEGER, checkpoint TEXT,
-            revenue_cum REAL, operating_income_cum REAL, net_income_cum REAL,
-            PRIMARY KEY (corp_name, bsns_year, checkpoint)
-        );""")
-    cur.executemany("INSERT OR REPLACE INTO quarterly VALUES (?,?,?,?,?,?)", rows)
+    cols = FLOW + STOCK
+    cur.executescript(
+        "DROP TABLE IF EXISTS quarterly;\n"
+        "CREATE TABLE quarterly (corp_name TEXT, bsns_year INTEGER, checkpoint TEXT, "
+        + ", ".join(f"{c} REAL" for c in cols)
+        + ", PRIMARY KEY (corp_name, bsns_year, checkpoint));")
+    for (corp, year, ckpt), rec in data.items():
+        cur.execute(
+            "INSERT OR REPLACE INTO quarterly VALUES (?,?,?," + ",".join(["?"]*len(cols)) + ")",
+            [corp, year, ckpt, *[rec[c] for c in cols]])
     conn.commit(); conn.close()
 
 
-def chart(rows, fname):
-    # rows -> dict[(corp,year,ckpt)] = (rev, op, net)
-    d = {(c, y, k): (rev, op, net) for (c, y, k, rev, op, net) in rows}
+# ── 차트 ─────────────────────────────────────────────────────
+def revenue_momentum_chart(data, fname):
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(13, 5))
-
-    # (좌) 2025 누적매출 YoY% by checkpoint
     for name in ORDER:
         ys = []
         for k in CKPT:
-            r25 = d.get((name, 2025, k), (None,))[0]
-            r24 = d.get((name, 2024, k), (None,))[0]
-            ys.append((r25 / r24 - 1) * 100 if (r25 and r24) else None)
+            r25 = data.get((name, 2025, k), {}).get("revenue")
+            r24 = data.get((name, 2024, k), {}).get("revenue")
+            ys.append((r25/r24-1)*100 if (r25 and r24) else None)
         xs = [i for i, v in enumerate(ys) if v is not None]
-        yv = [v for v in ys if v is not None]
+        yv = [ys[i] for i in xs]
         ax1.plot(xs, yv, marker="o", label=name, color=COLORS.get(name))
         for x, v in zip(xs, yv):
             ax1.text(x, v, f"{v:+.0f}%", ha="center", va="bottom", fontsize=9)
@@ -145,68 +187,152 @@ def chart(rows, fname):
     ax1.set_title("2025 누적매출 YoY 성장률 (분기 흐름)", fontsize=13, fontweight="bold")
     ax1.set_ylabel("전년동기대비 %"); ax1.legend(); ax1.grid(alpha=0.3)
 
-    # (우) 영업이익률(연간) 2024 vs 2025
     x = list(range(len(ORDER)))
     def opm(year):
         out = []
         for name in ORDER:
-            rev, op, _ = d.get((name, year, "연간"), (None, None, None))
-            out.append(op / rev * 100 if (rev and op) else 0)
+            r = data.get((name, year, "연간"), {})
+            out.append((r.get("operating_income") or 0)/r["revenue"]*100 if r.get("revenue") else 0)
         return out
-    b1 = ax2.bar([i - 0.2 for i in x], opm(2024), width=0.4, label="2024", color="#adb5bd")
-    b2 = ax2.bar([i + 0.2 for i in x], opm(2025), width=0.4, label="2025", color="#37b24d")
+    b1 = ax2.bar([i-0.2 for i in x], opm(2024), width=0.4, label="2024", color="#adb5bd")
+    b2 = ax2.bar([i+0.2 for i in x], opm(2025), width=0.4, label="2025", color="#37b24d")
     for bars in (b1, b2):
         for r in bars:
-            ax2.text(r.get_x() + r.get_width() / 2, r.get_height(),
-                     f"{r.get_height():.1f}", ha="center", va="bottom", fontsize=9)
+            ax2.text(r.get_x()+r.get_width()/2, r.get_height(), f"{r.get_height():.1f}",
+                     ha="center", va="bottom", fontsize=9)
     ax2.set_xticks(x); ax2.set_xticklabels(ORDER)
     ax2.set_title("영업이익률: 2024 vs 2025 (연간)", fontsize=13, fontweight="bold")
     ax2.set_ylabel("%"); ax2.legend(); ax2.grid(alpha=0.3, axis="y")
     fig.tight_layout(); fig.savefig(CHARTS / fname, dpi=120); plt.close(fig)
-    return d
 
 
-def write_section(d):
+def _series(data, fn, scale=1.0):
+    """SEQ 순서대로 기업별 지표 시계열(라벨,값) 생성."""
+    out = {}
+    for name in ORDER:
+        pts = []
+        for (y, k, lbl) in SEQ:
+            r = data.get((name, y, k))
+            v = fn(r) if r else None
+            pts.append((lbl, None if v is None else v*scale))
+        out[name] = pts
+    return out
+
+
+def credit_chart(data, fname):
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
+    labels = [lbl for _, _, lbl in SEQ]
+    for ax, fn, title, ylab, ref in [
+            (ax1, lambda r: debt_ratio(r), "부채비율 분기 추이 (낮을수록 안정)", "%", 200),
+            (ax2, lambda r: curr_ratio(r), "유동비율 분기 추이 (높을수록 안정)", "%", 100)]:
+        ser = _series(data, fn, scale=100.0)
+        for name in ORDER:
+            xs = [i for i, (_, v) in enumerate(ser[name]) if v is not None]
+            yv = [ser[name][i][1] for i in xs]
+            ax.plot(xs, yv, marker="o", label=name, color=COLORS.get(name))
+        ax.axhline(ref, ls="--", color="gray", lw=1)
+        ax.set_xticks(range(len(labels))); ax.set_xticklabels(labels, rotation=45, ha="right")
+        ax.set_title(title, fontsize=13, fontweight="bold")
+        ax.set_ylabel(ylab); ax.legend(); ax.grid(alpha=0.3)
+    fig.tight_layout(); fig.savefig(CHARTS / fname, dpi=120); plt.close(fig)
+
+
+def altman_quarterly_chart(data, fname):
+    fig, ax = plt.subplots(figsize=(10, 5.5))
+    labels = [lbl for _, _, lbl in SEQ]
+    for name in ORDER:
+        pts = []
+        for (y, k, lbl) in SEQ:
+            r = data.get((name, y, k))
+            pts.append(altman_z(r, k) if r else None)
+        xs = [i for i, v in enumerate(pts) if v is not None]
+        yv = [pts[i] for i in xs]
+        ax.plot(xs, yv, marker="o", label=name, color=COLORS.get(name))
+    ax.axhline(2.90, ls="--", color="green", lw=1); ax.text(0, 2.93, "안전 2.90", color="green", fontsize=9)
+    ax.axhline(1.23, ls="--", color="red", lw=1);   ax.text(0, 1.26, "위험 1.23", color="red", fontsize=9)
+    ax.set_xticks(range(len(labels))); ax.set_xticklabels(labels, rotation=45, ha="right")
+    ax.set_title("Altman Z'-Score 분기 추이 (흐름 연환산)", fontsize=13, fontweight="bold")
+    ax.set_ylabel("Z'-Score"); ax.legend(); ax.grid(alpha=0.3)
+    fig.tight_layout(); fig.savefig(CHARTS / fname, dpi=120); plt.close(fig)
+
+
+# ── 리포트(key_metrics.md) ───────────────────────────────────
+def write_2025_flow_section(data):
     lines = ["\n## 2025년 흐름 (분기 누적 데이터)\n",
              "> 연결 기준 누적(YTD) 매출의 전년동기대비(YoY) 성장률. 연중 모멘텀을 본다.\n",
-             "| 기업 | 1Q | 상반기 | 3분기 | 연간 |",
-             "|---|--:|--:|--:|--:|"]
+             "| 기업 | 1Q | 상반기 | 3분기 | 연간 |", "|---|--:|--:|--:|--:|"]
     for name in ORDER:
         cells = []
         for k in CKPT:
-            r25 = d.get((name, 2025, k), (None,))[0]
-            r24 = d.get((name, 2024, k), (None,))[0]
+            r25 = data.get((name, 2025, k), {}).get("revenue")
+            r24 = data.get((name, 2024, k), {}).get("revenue")
             cells.append(f"{(r25/r24-1)*100:+.1f}%" if (r25 and r24) else "-")
         lines.append(f"| {name} | " + " | ".join(cells) + " |")
-    # 연간 매출/영업이익률 2024→2025
     lines += ["\n**연간 실적 2024 → 2025**\n",
               "| 기업 | 매출(억) 24→25 | 영업이익률 24→25 |", "|---|--:|--:|"]
     for name in ORDER:
-        r24, o24, _ = d.get((name, 2024, "연간"), (None, None, None))
-        r25, o25, _ = d.get((name, 2025, "연간"), (None, None, None))
+        a = data.get((name, 2024, "연간"), {}); b = data.get((name, 2025, "연간"), {})
+        r24, o24 = a.get("revenue"), a.get("operating_income")
+        r25, o25 = b.get("revenue"), b.get("operating_income")
         rev = f"{r24/1e8:,.0f} → {r25/1e8:,.0f}" if (r24 and r25) else "-"
-        opm = (f"{o24/r24*100:.1f}% → {o25/r25*100:.1f}%"
-               if (r24 and o24 and r25 and o25) else "-")
+        opm = f"{o24/r24*100:.1f}% → {o25/r25*100:.1f}%" if (r24 and o24 and r25 and o25) else "-"
         lines.append(f"| {name} | {rev} | {opm} |")
     with open(OUTPUT / "key_metrics.md", "a", encoding="utf-8") as f:
         f.write("\n".join(lines) + "\n")
-    print("[작성] output/key_metrics.md (2025 분기 흐름 추가)")
+    print("[작성] key_metrics.md (2025 흐름)")
+
+
+def write_credit_section(data):
+    def fmt(v, suf="", d=1):
+        return "-" if v is None else f"{v:.{d}f}{suf}"
+    lines = ["\n## 분기 단위 신용지표 추적\n",
+             "> 분기말 BS + 누적 IS로 산출. 부채비율·유동비율은 분기말 시점, "
+             "이자보상배율·Altman Z'는 누적/연환산.\n",
+             "### 부채비율 분기 추이 (%)\n",
+             "| 기업 | " + " | ".join(lbl for _, _, lbl in SEQ) + " |",
+             "|---|" + "--:|"*len(SEQ)]
+    for name in ORDER:
+        cells = []
+        for (y, k, _) in SEQ:
+            r = data.get((name, y, k), {})
+            dr = div(r.get("total_liabilities"), r.get("total_equity"))
+            cells.append(fmt(dr * 100 if dr is not None else None))
+        lines.append(f"| {name} | " + " | ".join(cells) + " |")
+
+    lines += ["\n### 2025년 말 신용 스냅샷\n",
+              "| 기업 | 부채비율 | 유동비율 | 이자보상배율 | Altman Z' |",
+              "|---|--:|--:|--:|--:|"]
+    for name in ORDER:
+        r = data.get((name, 2025, "연간"), {})
+        dr = div(r.get("total_liabilities"), r.get("total_equity"))
+        cr = div(r.get("current_assets"), r.get("current_liabilities"))
+        ic = icr(r); z = altman_z(r, "연간")
+        lines.append(f"| {name} | {fmt(dr and dr*100)}% | {fmt(cr and cr*100,'',0)}% | "
+                     f"{fmt(ic,'배')} | {fmt(z, '', 2)} |")
+    with open(OUTPUT / "key_metrics.md", "a", encoding="utf-8") as f:
+        f.write("\n".join(lines) + "\n")
+    print("[작성] key_metrics.md (분기 신용지표)")
 
 
 def main():
-    rows = collect()
-    save_db(rows)
-    d = chart(rows, "chart9_2025_quarterly.png")
-    write_section(d)
-    print("\n=== 2025 누적매출 YoY ===")
+    data = collect()
+    save_db(data)
+    revenue_momentum_chart(data, "chart9_2025_quarterly.png")
+    credit_chart(data, "chart10_credit_quarterly.png")
+    altman_quarterly_chart(data, "chart11_altman_quarterly.png")
+    write_2025_flow_section(data)
+    write_credit_section(data)
+
+    print("\n=== 분기 신용지표 (부채비율 % | Altman Z') ===")
     for name in ORDER:
-        cells = []
-        for k in CKPT:
-            r25 = d.get((name, 2025, k), (None,))[0]
-            r24 = d.get((name, 2024, k), (None,))[0]
-            cells.append(f"{k} {(r25/r24-1)*100:+.1f}%" if (r25 and r24) else f"{k} -")
-        print(f"  {name}: " + " | ".join(cells))
-    print("\n[완료] chart9 + key_metrics 2025 흐름 -> output/")
+        parts = []
+        for (y, k, lbl) in SEQ:
+            r = data.get((name, y, k), {})
+            dr = div(r.get("total_liabilities"), r.get("total_equity"))
+            z = altman_z(r, k)
+            parts.append(f"{lbl} {('-' if dr is None else f'{dr*100:.0f}')}/{('-' if z is None else f'{z:.2f}')}")
+        print(f"  {name}: " + " | ".join(parts))
+    print("\n[완료] chart9~11 + key_metrics 분기 신용지표 -> output/")
 
 
 if __name__ == "__main__":
