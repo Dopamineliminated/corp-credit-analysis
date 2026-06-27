@@ -175,6 +175,48 @@ def write_kolmar_section(cfs, ofs):
     print("[작성] output/key_metrics.md (한국콜마 별도 비교 추가)")
 
 
+def cfs_ofs_compare_all(fname):
+    """3사 공통: 연결 vs 별도 — 본체(별도) 수익성·자본효율 비교 (최신연도)."""
+    cfs = add_ratios(load("CFS"))
+    ofs = add_ratios(load("OFS"))
+    yr = int(cfs["bsns_year"].max())
+    c = cfs[cfs["bsns_year"] == yr].set_index("corp_name").reindex(ORDER)
+    o = ofs[ofs["bsns_year"] == yr].set_index("corp_name").reindex(ORDER)
+
+    x = list(range(len(ORDER)))
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(13, 5))
+    for ax, col, title in [(ax1, "영업이익률", "영업이익률"), (ax2, "ROE", "ROE")]:
+        b1 = ax.bar([i - 0.2 for i in x], c[col], width=0.4, label="연결(CFS)", color="#868e96")
+        b2 = ax.bar([i + 0.2 for i in x], o[col], width=0.4, label="별도(OFS)", color="#fab005")
+        for bars in (b1, b2):
+            for rect in bars:
+                ax.text(rect.get_x() + rect.get_width() / 2, rect.get_height(),
+                        f"{rect.get_height():.1f}", ha="center", va="bottom", fontsize=9)
+        ax.set_xticks(x); ax.set_xticklabels(ORDER)
+        ax.set_title(f"{title}: 연결 vs 별도 ({yr})", fontsize=13, fontweight="bold")
+        ax.set_ylabel("%"); ax.legend(); ax.grid(alpha=0.3, axis="y")
+    fig.tight_layout(); fig.savefig(CHARTS / fname, dpi=120); plt.close(fig)
+    return c, o, yr
+
+
+def write_cfs_ofs_all_section(c, o, yr):
+    """key_metrics.md 에 3사 연결 vs 별도(최신연도) 요약표를 덧붙인다."""
+    lines = [f"\n## 3사 연결(CFS) vs 별도(OFS) — {yr}\n",
+             "> 별도(본체) 기준은 종속·해외법인을 제외한 본업의 모습. 3사 모두 본체 수익성이 연결보다 높다.\n",
+             "| 기업 | 별도/연결 매출 | 영업이익률(연결→별도) | ROE(연결→별도) | 부채비율(연결→별도) |",
+             "|---|--:|--:|--:|--:|"]
+    for name in ORDER:
+        share = o.loc[name, "revenue"] / c.loc[name, "revenue"] * 100
+        lines.append(
+            f"| {name} | {share:.0f}% | "
+            f"{c.loc[name,'영업이익률']:.1f}% → **{o.loc[name,'영업이익률']:.1f}%** | "
+            f"{c.loc[name,'ROE']:.1f}% → **{o.loc[name,'ROE']:.1f}%** | "
+            f"{c.loc[name,'부채비율']:.1f}% → {o.loc[name,'부채비율']:.1f}% |")
+    with open(OUTPUT / "key_metrics.md", "a", encoding="utf-8") as f:
+        f.write("\n".join(lines) + "\n")
+    print("[작성] output/key_metrics.md (3사 연결 vs 별도 추가)")
+
+
 def write_key_metrics(df):
     latest_year = int(df["bsns_year"].max())
     lines = ["# 핵심 지표 (Key Metrics)\n",
@@ -212,9 +254,13 @@ def main():
     altman_chart(df, "chart6_altman.png")
     write_key_metrics(df)
 
-    # 한국콜마 연결 vs 별도(OFS) 비교
+    # 한국콜마 연결 vs 별도(OFS) 심층 비교
     cfs, ofs = kolmar_cfs_ofs_chart("chart7_kolmar_cfs_ofs.png")
     write_kolmar_section(cfs, ofs)
+
+    # 3사 공통 연결 vs 별도 비교
+    c, o, yr = cfs_ofs_compare_all("chart8_cfs_ofs_compare.png")
+    write_cfs_ofs_all_section(c, o, yr)
 
     # 콘솔 요약
     pd.set_option("display.unicode.east_asian_width", True)
